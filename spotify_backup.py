@@ -5,14 +5,17 @@ import argparse
 import logging
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Callable
+from typing import Dict, List, Optional, Callable, Literal
 
 from spotipy import Spotify
 from spotipy.oauth2 import SpotifyOAuth
 from spotipy.cache_handler import CacheFileHandler
 
 
-SCOPE = "playlist-read-private,playlist-read-collaborative,user-library-read"
+SCOPE = "playlist-read-private,playlist-read-collaborative,user-library-read,user-top-read,user-follow-read"
+SAVED_OBJECT_TYPES = ("albums", "episodes", "shows", "tracks")
+TOP_OBJECT_TYPES = ("artists", "tracks")
+TOP_RANGES = ("short_term", "medium_term", "long_term")
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +56,9 @@ class SpotifyBackup:
         bdir.mkdir(parents=True, exist_ok=True)
         return bdir
 
-    def _get_all_items(self, func: Callable) -> Dict:
+    def _get_all_items(self, func: Callable, **kwargs) -> Dict:
         """Return all items for a paginated result set of Spotify"""
-        result = func()
+        result = func(**kwargs)
         items = result["items"]
         while result["next"]:
             result = self.sp.next(result)
@@ -64,7 +67,9 @@ class SpotifyBackup:
 
     def backup_everything(self):
         self.backup_playlists()
-        self.backup_saved_tracks()
+        self.backup_saved_objects()
+        self.backup_top_objects()
+        self.backup_followed_artists()
 
     def _backup_playlist(self, playlist: Dict, path: Path):
         """Backup a playlist, including all track details"""
@@ -109,10 +114,51 @@ class SpotifyBackup:
                 backup_dir = self._ensure_dir(path / "starred")
             self._backup_playlist(playlist, backup_dir)
 
-    def backup_saved_tracks(self):
-        """Backup users saved tracks"""
-        saved_tracks = self._get_all_items(self.sp.current_user_saved_tracks)
-        self._dump_json(self._ensure_dir() / "saved_tracks.json", saved_tracks)
+    def backup_saved_objects(
+        self, objtype: Optional[Literal[SAVED_OBJECT_TYPES]] = None
+    ):
+        """Backup users saved objects"""
+
+        def _dump(objtype):
+            logger.info("Backing up saved %s", objtype)
+            func = getattr(self.sp, "current_user_saved_" + objtype)
+            result = self._get_all_items(func)
+            self._dump_json(self._ensure_dir() / f"saved_{objtype}.json", result)
+
+        if objtype is None:
+            for objtype in SAVED_OBJECT_TYPES:
+                _dump(objtype)
+        else:
+            _dump(objtype)
+
+    def backup_top_objects(self, objtype: Optional[Literal[TOP_OBJECT_TYPES]] = None):
+        """Backup users top objects"""
+
+        def _dump(objtype):
+            for top_range in TOP_RANGES:
+                logger.info("Backing up top %s %s", objtype, top_range)
+                func = getattr(self.sp, "current_user_top_" + objtype)
+                result = self._get_all_items(func, time_range=top_range)
+                self._dump_json(
+                    self._ensure_dir() / f"top_{objtype}_{top_range}.json", result
+                )
+
+        if objtype is None:
+            for objtype in TOP_OBJECT_TYPES:
+                _dump(objtype)
+        else:
+            _dump(objtype)
+
+    def backup_followed_artists(self):
+        """Backup users followed artists"""
+
+        logger.info("Backing up followed artists")
+        result = self.sp.current_user_followed_artists()["artists"]
+        artists = result["items"]
+        while result["next"]:
+            result = self.sp.next(result)["artists"]
+            artists.extend(result["items"])
+        self._dump_json(self._ensure_dir() / f"followed_artists.json", artists)
 
 
 def main():
