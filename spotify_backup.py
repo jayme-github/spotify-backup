@@ -5,7 +5,7 @@ import argparse
 import logging
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Callable
 
 from spotipy import Spotify
 from spotipy.oauth2 import SpotifyOAuth
@@ -53,15 +53,14 @@ class SpotifyBackup:
         bdir.mkdir(parents=True, exist_ok=True)
         return bdir
 
-    def get_playlists(self) -> List[Dict]:
-        result = self.sp.current_user_playlists()
-        playlists = result["items"]
-
+    def _get_all_items(self, func: Callable) -> Dict:
+        """Return all items for a paginated result set of Spotify"""
+        result = func()
+        items = result["items"]
         while result["next"]:
             result = self.sp.next(result)
-            playlists.extend(result["items"])
-
-        return playlists
+            items.extend(result["items"])
+        return items
 
     def backup_everything(self):
         self.backup_playlists()
@@ -101,7 +100,7 @@ class SpotifyBackup:
     def backup_playlists(self):
         """Backup all users playlists (own and starred)"""
         path = Path("playlists")
-        for playlist in self.get_playlists():
+        for playlist in self._get_all_items(self.sp.current_user_playlists):
             if playlist["owner"]["id"] == self.user_id:
                 # my playlist
                 backup_dir = self._ensure_dir(path / "my")
@@ -112,13 +111,7 @@ class SpotifyBackup:
 
     def backup_saved_tracks(self):
         """Backup users saved tracks"""
-        result = self.sp.current_user_saved_tracks()
-        saved_tracks = result["items"]
-
-        while result["next"]:
-            result = self.sp.next(result)
-            saved_tracks.extend(result["items"])
-
+        saved_tracks = self._get_all_items(self.sp.current_user_saved_tracks)
         self._dump_json(self._ensure_dir() / "saved_tracks.json", saved_tracks)
 
 
