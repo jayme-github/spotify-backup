@@ -12,7 +12,18 @@ from spotipy.oauth2 import SpotifyOAuth
 from spotipy.cache_handler import CacheFileHandler
 
 
-SCOPE = "playlist-read-private,playlist-read-collaborative,user-library-read,user-top-read,user-follow-read"
+CLIENT_ID = "aba916bbd6214fdc8bc993344439c58e"
+REDIRECT_URI = "http://localhost/"
+# SPOTIPY_CLIENT_SECRET must be provided via env variable
+SCOPES = (
+    "playlist-read-private",
+    "playlist-read-collaborative",
+    "user-library-read",  # Needed to read saved tracks
+    "user-top-read",
+    "user-follow-read",
+)
+
+
 SAVED_OBJECT_TYPES = ("albums", "episodes", "shows", "tracks")
 TOP_OBJECT_TYPES = ("artists", "tracks")
 TOP_RANGES = ("short_term", "medium_term", "long_term")
@@ -37,7 +48,10 @@ class SpotifyBackup:
 
     def get_client(self) -> Spotify:
         auth_manager = SpotifyOAuth(
-            scope=SCOPE, cache_handler=CacheFileHandler(cache_path=self.cache_path())
+            client_id=CLIENT_ID,
+            redirect_uri=REDIRECT_URI,
+            scope=",".join(SCOPES),
+            cache_handler=CacheFileHandler(cache_path=self.cache_path()),
         )
         return Spotify(auth_manager=auth_manager)
 
