@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 
 
 class SpotifyBackup:
-    def __init__(self, backup_path: Path):
+    def __init__(self, backup_path: Path, pretty: bool = False):
+        self.pretty = pretty
         self.sp = self.get_client()
         self.user_id = self.sp.me()["id"]
         self.backup_path = backup_path
@@ -40,13 +41,15 @@ class SpotifyBackup:
         )
         return Spotify(auth_manager=auth_manager)
 
-    @staticmethod
-    def _dump_json(path: Path, j: Dict):
+    def _dump_json(self, path: Path, j: Dict):
         # Ensure .json suffix
         if not path.suffix == ".json":
             path = path.parent / (path.name + ".json")
+        kwargs = {"sort_keys": True}
+        if self.pretty:
+            kwargs["indent"] = 2
         with open(path, "w") as f:
-            json.dump(j, f, sort_keys=True, indent=2)
+            json.dump(j, f, **kwargs)
 
     def _ensure_dir(self, what: Optional[Path] = None) -> Path:
         if what is None:
@@ -173,6 +176,9 @@ def main():
         default=Path(__file__).absolute().parent / "backup",
         help="Backup path",
     )
+    parser.add_argument(
+        "--pretty", action="store_true", help='Create "pretty" JSON files'
+    )
 
     args = parser.parse_args()
 
@@ -187,7 +193,7 @@ def main():
         level=level,
     )
 
-    sb = SpotifyBackup(args.backup_dir)
+    sb = SpotifyBackup(args.backup_dir, args.pretty)
     sb.backup_everything()
 
 
