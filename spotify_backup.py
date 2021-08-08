@@ -5,7 +5,12 @@ import argparse
 import logging
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Callable, Literal
+from typing import Dict, List, Optional, Callable
+
+try:
+    from typing import Literal
+except ImportError:
+    from typing_extensions import Literal
 
 from spotipy import Spotify
 from spotipy.oauth2 import SpotifyOAuth
@@ -50,6 +55,7 @@ class SpotifyBackup:
         auth_manager = SpotifyOAuth(
             client_id=CLIENT_ID,
             redirect_uri=REDIRECT_URI,
+            open_browser=False,
             scope=",".join(SCOPES),
             cache_handler=CacheFileHandler(cache_path=self.cache_path()),
         )
