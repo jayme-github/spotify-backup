@@ -17,7 +17,7 @@ from spotipy.oauth2 import SpotifyOAuth
 from spotipy.cache_handler import CacheFileHandler
 
 
-CLIENT_ID = "aba916bbd6214fdc8bc993344439c58e"
+CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID", "aba916bbd6214fdc8bc993344439c58e")
 REDIRECT_URI = "http://localhost/"
 # SPOTIPY_CLIENT_SECRET must be provided via env variable
 SCOPES = (
