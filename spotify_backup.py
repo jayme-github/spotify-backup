@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import os
 import argparse
 import logging
 import json
@@ -12,13 +11,8 @@ try:
 except ImportError:
     from typing_extensions import Literal
 
-from spotipy import Spotify
-from spotipy.oauth2 import SpotifyOAuth
-from spotipy.cache_handler import CacheFileHandler
+from common import *
 
-
-CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID", "aba916bbd6214fdc8bc993344439c58e")
-REDIRECT_URI = "http://localhost/"
 # SPOTIPY_CLIENT_SECRET must be provided via env variable
 SCOPES = (
     "playlist-read-private",
@@ -28,38 +22,15 @@ SCOPES = (
     "user-follow-read",
 )
 
-
-SAVED_OBJECT_TYPES = ("albums", "episodes", "shows", "tracks")
-TOP_OBJECT_TYPES = ("artists", "tracks")
-TOP_RANGES = ("short_term", "medium_term", "long_term")
-
 logger = logging.getLogger(__name__)
 
 
-class SpotifyBackup:
+class SpotifyBackup(SpotifyBase):
     def __init__(self, backup_path: Path, pretty: bool = False):
         self.pretty = pretty
-        self.sp = self.get_client()
-        self.user_id = self.sp.me()["id"]
-        self.backup_path = backup_path
-
-    @staticmethod
-    def cache_path() -> Path:
-        fallback_path = Path(os.environ["HOME"], ".config")
-        return Path(
-            os.environ.get("XDG_CONFIG_HOME", fallback_path),
-            "spotify-backup",
+        super().__init__(
+            scopes=SCOPES, cache_file="spotify-backup", backup_path=backup_path
         )
-
-    def get_client(self) -> Spotify:
-        auth_manager = SpotifyOAuth(
-            client_id=CLIENT_ID,
-            redirect_uri=REDIRECT_URI,
-            open_browser=False,
-            scope=",".join(SCOPES),
-            cache_handler=CacheFileHandler(cache_path=self.cache_path()),
-        )
-        return Spotify(auth_manager=auth_manager)
 
     def _dump_json(self, path: Path, j: Dict):
         # Ensure .json suffix
