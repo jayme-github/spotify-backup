@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
-import os
 import argparse
-import logging
 import json
+import logging
+import os
 from pathlib import Path
-from typing import Dict, List, Optional, Callable
+from typing import Callable, Dict, Optional, Tuple, get_args
 
 try:
     from typing import Literal
@@ -13,9 +13,8 @@ except ImportError:
     from typing_extensions import Literal
 
 from spotipy import Spotify
-from spotipy.oauth2 import SpotifyOAuth
 from spotipy.cache_handler import CacheFileHandler
-
+from spotipy.oauth2 import SpotifyOAuth
 
 CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID", "aba916bbd6214fdc8bc993344439c58e")
 REDIRECT_URI = "http://localhost/"
@@ -29,9 +28,12 @@ SCOPES = (
 )
 
 
-SAVED_OBJECT_TYPES = ("albums", "episodes", "shows", "tracks")
-TOP_OBJECT_TYPES = ("artists", "tracks")
-TOP_RANGES = ("short_term", "medium_term", "long_term")
+_SAVED_OBJECT_TYPES = Literal["albums", "episodes", "shows", "tracks"]
+SAVED_OBJECT_TYPES: Tuple[_SAVED_OBJECT_TYPES, ...] = get_args(_SAVED_OBJECT_TYPES)
+_TOP_OBJECT_TYPES = Literal["artists", "tracks"]
+TOP_OBJECT_TYPES: Tuple[_TOP_OBJECT_TYPES, ...] = get_args(_TOP_OBJECT_TYPES)
+_TOP_RANGES = Literal["short_term", "medium_term", "long_term"]
+TOP_RANGES: Tuple[_TOP_RANGES, ...] = get_args(_TOP_RANGES)
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +107,7 @@ class SpotifyBackup:
             try:
                 with open(playlist_path, "r") as f:
                     have_snapshot_id = json.load(f).get("snapshot_id", None)
-            except:
+            except:  # noqa: E722
                 have_snapshot_id = None
             if playlist["snapshot_id"] == have_snapshot_id:
                 # We already have a up to date backup of this playlist
@@ -138,7 +140,7 @@ class SpotifyBackup:
             self._backup_playlist(playlist, backup_dir)
 
     def backup_saved_objects(
-        self, objtype: Optional[Literal[SAVED_OBJECT_TYPES]] = None
+        self, objtype: Optional[_SAVED_OBJECT_TYPES] = None
     ):
         """Backup users saved objects"""
 
@@ -154,7 +156,7 @@ class SpotifyBackup:
         else:
             _dump(objtype)
 
-    def backup_top_objects(self, objtype: Optional[Literal[TOP_OBJECT_TYPES]] = None):
+    def backup_top_objects(self, objtype: Optional[_TOP_OBJECT_TYPES] = None):
         """Backup users top objects"""
 
         def _dump(objtype):
@@ -181,7 +183,7 @@ class SpotifyBackup:
         while result["next"]:
             result = self.sp.next(result)["artists"]
             artists.extend(result["items"])
-        self._dump_json(self._ensure_dir() / f"followed_artists.json", artists)
+        self._dump_json(self._ensure_dir() / "followed_artists.json", artists)
 
 
 def main():
