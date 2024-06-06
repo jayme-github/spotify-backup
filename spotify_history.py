@@ -72,11 +72,9 @@ class SpotifyHistoryDB:
 
     def _insert_history_item(self, cur: sqlite3.Cursor, played_at: int, track: dict):
         cur.execute(
-            "INSERT OR IGNORE INTO history VALUES (unixepoch(?), ?, ?, ?)",
+            "INSERT OR IGNORE INTO history VALUES (unixepoch(?), ?)",
             (
                 played_at,
-                track["name"],
-                track["artists"][0]["name"],
                 track["id"],
             ),
         )
@@ -84,12 +82,12 @@ class SpotifyHistoryDB:
     def insert_items(self, items: List):
         cur = self.con.cursor()
         for item in items:
+            track = item["track"]
             try:
-                self._insert_history_item(cur, item)
+                self._insert_history_item(cur, item["played_at"], track)
             except sqlite3.IntegrityError:
-                track = item["track"]
                 cur.execute("INSERT OR REPLACE INTO tracks VALUES (?, ?)", (track["id"], json.dumps(track)))
-                self._insert_history_item(cur, item)
+                self._insert_history_item(cur, item["played_at"], track)
 
         cur.close()
         self.con.commit()
