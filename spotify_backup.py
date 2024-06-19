@@ -3,35 +3,16 @@
 import argparse
 import json
 import logging
-import os
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple, get_args
-from collections.abc import MutableMapping
-from contextlib import suppress
+from typing import Dict, Optional, Tuple, get_args
 
 try:
     from typing import Literal
 except ImportError:
-    from typing_extensions import Literal
+    from typing_extensions import Literal  # type: ignore
 
-from spotipy import Spotify
-from spotipy.cache_handler import CacheFileHandler
-from spotipy.oauth2 import SpotifyOAuth
-
+from spotify import SpotifyClient
 from spotify_history import SpotifyHistoryDB
-
-CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID", "aba916bbd6214fdc8bc993344439c58e")
-REDIRECT_URI = "http://localhost/"
-# SPOTIPY_CLIENT_SECRET must be provided via env variable
-SCOPES = (
-    "playlist-read-private",
-    "playlist-read-collaborative",
-    "user-library-read",  # Needed to read saved tracks
-    "user-top-read",
-    "user-follow-read",
-    "user-read-recently-played",
-)
-
 
 _SAVED_OBJECT_TYPES = Literal["albums", "episodes", "shows", "tracks"]
 SAVED_OBJECT_TYPES: Tuple[_SAVED_OBJECT_TYPES, ...] = get_args(_SAVED_OBJECT_TYPES)
@@ -43,39 +24,11 @@ TOP_RANGES: Tuple[_TOP_RANGES, ...] = get_args(_TOP_RANGES)
 logger = logging.getLogger(__name__)
 
 
-def delete_keys_from_dict(dictionary, keys):
-    for key in keys:
-        with suppress(KeyError):
-            del dictionary[key]
-    for value in dictionary.values():
-        if isinstance(value, MutableMapping):
-            delete_keys_from_dict(value, keys)
-
-
-class SpotifyBackup:
+class SpotifyBackup(SpotifyClient):
     def __init__(self, backup_path: Path, pretty: bool = False):
         self.pretty = pretty
-        self.sp = self.get_client()
-        self.user_id = self.sp.me()["id"]
         self.backup_path = backup_path
-
-    @staticmethod
-    def cache_path() -> Path:
-        fallback_path = Path(os.environ["HOME"], ".config")
-        return Path(
-            os.environ.get("XDG_CONFIG_HOME", fallback_path),
-            "spotify-backup",
-        )
-
-    def get_client(self) -> Spotify:
-        auth_manager = SpotifyOAuth(
-            client_id=CLIENT_ID,
-            redirect_uri=REDIRECT_URI,
-            open_browser=False,
-            scope=",".join(SCOPES),
-            cache_handler=CacheFileHandler(cache_path=self.cache_path()),
-        )
-        return Spotify(auth_manager=auth_manager)
+        super().__init__()
 
     def _dump_json(self, path: Path, j: Dict):
         # Ensure .json suffix
@@ -94,15 +47,6 @@ class SpotifyBackup:
             bdir = self.backup_path / what
         bdir.mkdir(parents=True, exist_ok=True)
         return bdir
-
-    def _get_all_items(self, func: Callable, **kwargs) -> Dict:
-        """Return all items for a paginated result set of Spotify"""
-        result = func(**kwargs)
-        items = result["items"]
-        while result["next"]:
-            result = self.sp.next(result)
-            items.extend(result["items"])
-        return items
 
     def backup_everything(self):
         self.backup_playlists()
@@ -144,8 +88,9 @@ class SpotifyBackup:
 
     def backup_playlists(self):
         """Backup all users playlists (own and starred)"""
+        logger.info("Backing up playlists")
         path = Path("playlists")
-        for playlist in self._get_all_items(self.sp.current_user_playlists):
+        for playlist in self.get_all_items(self.sp.current_user_playlists):
             if playlist["owner"]["id"] == self.user_id:
                 # my playlist
                 backup_dir = self._ensure_dir(path / "my")
@@ -160,7 +105,7 @@ class SpotifyBackup:
         def _dump(objtype):
             logger.info("Backing up saved %s", objtype)
             func = getattr(self.sp, "current_user_saved_" + objtype)
-            result = self._get_all_items(func)
+            result = self.get_all_items(func)
             self._dump_json(self._ensure_dir() / f"saved_{objtype}.json", result)
 
         if objtype is None:
@@ -176,7 +121,7 @@ class SpotifyBackup:
             for top_range in TOP_RANGES:
                 logger.info("Backing up top %s %s", objtype, top_range)
                 func = getattr(self.sp, "current_user_top_" + objtype)
-                result = self._get_all_items(func, time_range=top_range)
+                result = self.get_all_items(func, time_range=top_range)
                 self._dump_json(self._ensure_dir() / f"top_{objtype}_{top_range}.json", result)
 
         if objtype is None:
@@ -207,6 +152,7 @@ class SpotifyBackup:
 
         [1] https://developer.spotify.com/documentation/web-api/reference/get-recently-played
         """
+        logger.info("Backing up listening history")
         db = SpotifyHistoryDB(self._ensure_dir() / "history.sqlite")
         # Add a second to the last timestamp to avoid duplicates
         after = (db.get_most_recent_timestamp() * 1000) + 1000
@@ -217,16 +163,8 @@ class SpotifyBackup:
             items.extend(result["items"])
         if items:
             logger.info("Backing up %d history items", len(items))
-            self._cleanup_history_items(items)
-            db.insert_items(items)
+            db.insert_play_history_objects(items)
         db.close_connection()
-
-    def _cleanup_history_items(self, items):
-        """Remove (probably irrelevant) keys from the history items to reduce the size of the history database"""
-        for item in items:
-            delete_keys_from_dict(
-                item, ("available_markets", "context", "images", "preview_url", "external_urls", "href")
-            )
 
 
 def main():
