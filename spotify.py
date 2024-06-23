@@ -19,10 +19,17 @@ SCOPES = (
 )
 
 
-class SpotifyClient:
+class SpotifyClient(Spotify):
     def __init__(self):
-        self.sp = self.get_client()
-        self.user_id = self.sp.me()["id"]
+        self._auth_manager = SpotifyOAuth(
+            client_id=CLIENT_ID,
+            redirect_uri=REDIRECT_URI,
+            open_browser=False,
+            scope=",".join(SCOPES),
+            cache_handler=CacheFileHandler(cache_path=self.cache_path()),
+        )
+        super().__init__(auth_manager=self._auth_manager)
+        self.user_id = self.me()["id"]
 
     @staticmethod
     def cache_path() -> Path:
@@ -32,24 +39,11 @@ class SpotifyClient:
             "spotify-backup",
         )
 
-    def get_client(self) -> Spotify:
-        if getattr(self, "sp", None):
-            return self.sp
-
-        auth_manager = SpotifyOAuth(
-            client_id=CLIENT_ID,
-            redirect_uri=REDIRECT_URI,
-            open_browser=False,
-            scope=",".join(SCOPES),
-            cache_handler=CacheFileHandler(cache_path=self.cache_path()),
-        )
-        return Spotify(auth_manager=auth_manager)
-
     def get_all_items(self, func: Callable, **kwargs) -> Dict:
         """Return all items for a paginated result set of Spotify"""
         result = func(**kwargs)
         items = result["items"]
         while result["next"]:
-            result = self.sp.next(result)
+            result = self.next(result)
             items.extend(result["items"])
         return items

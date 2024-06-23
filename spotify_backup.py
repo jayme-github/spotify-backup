@@ -24,11 +24,11 @@ TOP_RANGES: Tuple[_TOP_RANGES, ...] = get_args(_TOP_RANGES)
 logger = logging.getLogger(__name__)
 
 
-class SpotifyBackup(SpotifyClient):
+class SpotifyBackup:
     def __init__(self, backup_path: Path, pretty: bool = False):
         self.pretty = pretty
         self.backup_path = backup_path
-        super().__init__()
+        self.sp = SpotifyClient()
 
     def _dump_json(self, path: Path, j: Dict):
         # Ensure .json suffix
@@ -90,8 +90,8 @@ class SpotifyBackup(SpotifyClient):
         """Backup all users playlists (own and starred)"""
         logger.info("Backing up playlists")
         path = Path("playlists")
-        for playlist in self.get_all_items(self.sp.current_user_playlists):
-            if playlist["owner"]["id"] == self.user_id:
+        for playlist in self.sp.get_all_items(self.sp.current_user_playlists):
+            if playlist["owner"]["id"] == self.sp.user_id:
                 # my playlist
                 backup_dir = self._ensure_dir(path / "my")
             else:
@@ -105,7 +105,7 @@ class SpotifyBackup(SpotifyClient):
         def _dump(objtype):
             logger.info("Backing up saved %s", objtype)
             func = getattr(self.sp, "current_user_saved_" + objtype)
-            result = self.get_all_items(func)
+            result = self.sp.get_all_items(func)
             self._dump_json(self._ensure_dir() / f"saved_{objtype}.json", result)
 
         if objtype is None:
@@ -121,7 +121,7 @@ class SpotifyBackup(SpotifyClient):
             for top_range in TOP_RANGES:
                 logger.info("Backing up top %s %s", objtype, top_range)
                 func = getattr(self.sp, "current_user_top_" + objtype)
-                result = self.get_all_items(func, time_range=top_range)
+                result = self.sp.get_all_items(func, time_range=top_range)
                 self._dump_json(self._ensure_dir() / f"top_{objtype}_{top_range}.json", result)
 
         if objtype is None:
@@ -191,7 +191,7 @@ def main():
         if args.verbose > 1:
             level = logging.DEBUG
     logging.basicConfig(
-        format="%(asctime)s [%(levelname)s] (%(name)s.%(funcName)s) %(message)s",  # NOQA
+        format="%(asctime)s [%(levelname)s] (%(name)s.%(funcName)s) %(message)s",
         level=level,
     )
 
