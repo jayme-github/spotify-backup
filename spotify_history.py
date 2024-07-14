@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 
 import argparse
-import sys
 import json
 import logging
 import sqlite3
+import sys
 from collections.abc import MutableMapping
 from contextlib import suppress
-from datetime import UTC, datetime, date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import List
 
@@ -40,13 +40,18 @@ def dict_factory(cursor: sqlite3.Cursor, row: tuple) -> dict:
     return {key: value for key, value in zip(fields, row)}
 
 
-def print_top_table(history: List[dict], headers: tuple | dict = None):
+def print_table(history: List[dict], headers: tuple | dict = None):
     def _sorted():
         keys = list(headers.keys())
         for item in history:
             # Yield a dict that only contains keys referenced in the headers
             # ordered by the order of the headers.
-            yield dict(sorted(filter(lambda pair: pair[0] in keys, item.items()), key=lambda pair: keys.index(pair[0])))
+            yield dict(
+                sorted(
+                    filter(lambda pair: pair[0] in keys, item.items()),
+                    key=lambda pair: keys.index(pair[0]),
+                )
+            )
 
     if isinstance(headers, tuple):
         # tabulate requires headers to be a dict if table data is a list of dicts
@@ -82,7 +87,9 @@ class SpotifyHistoryDB:
         # Convert datetime objects to unix timestamps when inserting into the database
         # sqlite3.register_adapter(datetime, lambda dt: timegm(dt.utctimetuple()))
         # Convert cells with type "unixepoch" to datetime objects
-        sqlite3.register_converter("unixepoch", lambda ts: datetime.fromtimestamp(int(ts), UTC))
+        sqlite3.register_converter(
+            "unixepoch", lambda ts: datetime.fromtimestamp(int(ts), UTC)
+        )
 
         if isinstance(db_file, str):
             db_file = Path(db_file)
@@ -106,7 +113,15 @@ class SpotifyHistoryDB:
         """Remove (probably irrelevant) keys from the history items to reduce the size of the history database"""
         for item in items:
             delete_keys_from_dict(
-                item, ("available_markets", "context", "images", "preview_url", "external_urls", "href")
+                item,
+                (
+                    "available_markets",
+                    "context",
+                    "images",
+                    "preview_url",
+                    "external_urls",
+                    "href",
+                ),
             )
 
     def _insert_history_item(self, cur: sqlite3.Cursor, played_at: int, track_id: str):
@@ -121,9 +136,14 @@ class SpotifyHistoryDB:
     def _insert_track(self, cur: sqlite3.Cursor, track_id: str, track: dict = None):
         if track is None:
             # This uses the "INSERT OR IGNORE" clause to avoid overriding existing tracks data with NULL
-            cur.execute("INSERT OR IGNORE INTO tracks (track_id) VALUES (?)", (track_id,))
+            cur.execute(
+                "INSERT OR IGNORE INTO tracks (track_id) VALUES (?)", (track_id,)
+            )
         else:
-            cur.execute("INSERT OR REPLACE INTO tracks VALUES (?, ?)", (track_id, json.dumps(track)))
+            cur.execute(
+                "INSERT OR REPLACE INTO tracks VALUES (?, ?)",
+                (track_id, json.dumps(track)),
+            )
 
     def insert_play_history_objects(self, play_history_objects: List):
         self._cleanup_history_items(play_history_objects)
@@ -147,7 +167,12 @@ class SpotifyHistoryDB:
         with json_file.open("r") as f:
             data = json.load(f)
             for entry in data:
-                if any(map(lambda x: entry.get(x) is None, ["ts", "ms_played", "spotify_track_uri"])):
+                if any(
+                    map(
+                        lambda x: entry.get(x) is None,
+                        ["ts", "ms_played", "spotify_track_uri"],
+                    )
+                ):
                     # Skip entries missing relevant data (like podcast episodes)
                     continue
                 if entry["ms_played"] < 1000:
@@ -159,10 +184,13 @@ class SpotifyHistoryDB:
 
         cur = self.con.cursor()
         tracks_added = cur.executemany(
-            "INSERT OR IGNORE INTO tracks (track_id) VALUES (?)", [(track_id,) for _, track_id in history]
+            "INSERT OR IGNORE INTO tracks (track_id) VALUES (?)",
+            [(track_id,) for _, track_id in history],
         ).rowcount
         logger.info(f"Added {tracks_added} tracks")
-        history_added = cur.executemany("INSERT OR IGNORE INTO history VALUES (unixepoch(?), ?)", history).rowcount
+        history_added = cur.executemany(
+            "INSERT OR IGNORE INTO history VALUES (unixepoch(?), ?)", history
+        ).rowcount
         logger.info(f"Added {history_added} history items")
         cur.close()
         self.con.commit()
@@ -194,11 +222,14 @@ class SpotifyHistoryDB:
             tracks = spotify.tracks(tracks=batch)["tracks"]
             self._cleanup_history_items(tracks)
             backfilled_tracks += cur.executemany(
-                "UPDATE tracks SET data=? WHERE track_id=?", [(json.dumps(track), track["id"]) for track in tracks]
+                "UPDATE tracks SET data=? WHERE track_id=?",
+                [(json.dumps(track), track["id"]) for track in tracks],
             ).rowcount
             # Ensure data is committed to the database after each batch
             self.con.commit()
-            logger.info(f"Backfilled {backfilled_tracks} of {tracks_to_backfill} tracks")
+            logger.info(
+                f"Backfilled {backfilled_tracks} of {tracks_to_backfill} tracks"
+            )
         cur.close()
 
     def get_most_recent_timestamp(self) -> int:
@@ -208,11 +239,27 @@ class SpotifyHistoryDB:
             return 0
         return timestamp
 
-    def get_history(self, limit: int = -1) -> List[dict]:
+    def get_history(self, start, end: datetime = None, limit: int = -1) -> List[dict]:
         cur = self.con.cursor()
         cur.row_factory = dict_factory
+
+        args = (limit,)
+        where_clause = ""
+        if start and end:
+            where_clause = """
+                WHERE
+                    datetime(h.played_at, 'unixepoch') BETWEEN datetime(?) AND datetime(?)
+                """
+            args = (start, end, limit)
+        elif start:
+            where_clause = "WHERE datetime(h.played_at, 'unixepoch') >= datetime(?)"
+            args = (start, limit)
+        elif end:
+            where_clause = " AND datetime(h.played_at, 'unixepoch') <= datetime(?)"
+            args = (end, limit)
+
         cur.execute(
-            """
+            f"""
             SELECT
                 h.played_at as "played_at [unixepoch]",
                 json_extract(t.data, '$.name') AS track_name,
@@ -222,11 +269,12 @@ class SpotifyHistoryDB:
                 history h
             JOIN
                 tracks t ON h.track_id == t.track_id
+            {where_clause}
             ORDER BY
                 h.played_at DESC
             LIMIT ?
             """,
-            (limit,),
+            args,
         )
         return cur.fetchall()
 
@@ -263,12 +311,20 @@ class SpotifyHistoryDB:
         return self.get_top_tracks(today_last_year, today_last_year, limit)
 
 
-def cmd_full_history(db: SpotifyHistoryDB, args: argparse.Namespace):
-    history = db.get_history()
-    start = history[-1]["played_at"]
-    end = history[0]["played_at"]
-    print(f"Listening History from {start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}, {len(history)} items:")
-    print_top_table(history)
+def cmd_history(db: SpotifyHistoryDB, args: argparse.Namespace):
+    history = db.get_history(args.start, args.end)
+    start = history[-1]["played_at"].strftime("%Y-%m-%d %H:%M:%s")
+    end = history[0]["played_at"].strftime("%Y-%m-%d %H:%M:%s")
+    print(f"Listening History from {start} to {end}, {len(history)} items:")
+    if args.create_playlist:
+        spotify = SpotifyClient()
+        track_ids = [item["track_id"] for item in history]
+        track_ids.reverse()
+        playlist = spotify.create_playlist(args.create_playlist, track_ids)
+        print(
+            f"Playlist created with {len(track_ids)} tracks: {playlist['external_urls']['spotify']}"
+        )
+    print_table(history)
 
 
 def cmd_import_history(db: SpotifyHistoryDB, args: argparse.Namespace):
@@ -286,7 +342,7 @@ def cmd_top_tracks(db: SpotifyHistoryDB, args: argparse.Namespace):
     print(
         f"Top {str(args.limit) + ' ' if args.limit > 0 else ''}tracks from {start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}:"
     )
-    print_top_table(
+    print_table(
         top,
         {
             "play_count": "#",
@@ -300,8 +356,10 @@ def cmd_top_tracks(db: SpotifyHistoryDB, args: argparse.Namespace):
 
 def cmd_today_last_year(db: SpotifyHistoryDB, args: argparse.Namespace):
     top = db.get_today_last_year(args.limit)
-    print(f"Top {str(args.limit) + ' ' if args.limit > 0 else ''}tracks from today last year:")
-    print_top_table(
+    print(
+        f"Top {str(args.limit) + ' ' if args.limit > 0 else ''}tracks from today last year:"
+    )
+    print_table(
         top,
         {
             "play_count": "#",
@@ -318,14 +376,29 @@ def main():
         description="Spotify history",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("-v", "--verbose", action="count")
+    parser.add_argument(
+        "-v", "--verbose", action="count", default=0, help="Increase verbosity"
+    )
     parser.add_argument(
         "--backup-dir",
         type=lambda p: Path(p).absolute(),
         default=Path(__file__).absolute().parent / "backup",
         help="Backup path",
     )
-    parser.set_defaults(func=cmd_full_history)
+    parser.set_defaults(func=cmd_history)
+    parser.add_argument(
+        "--start",
+        type=datetime.fromisoformat,
+        help="Start date",
+    )
+    parser.add_argument(
+        "--end",
+        type=datetime.fromisoformat,
+        help="End date (inclusive)",
+    )
+    parser.add_argument(
+        "--create-playlist", help="Name of the playlist to write results to"
+    )
     subparser = parser.add_subparsers()
 
     import_history = subparser.add_parser(
@@ -346,10 +419,20 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     top_tracks.add_argument(
-        "--start", type=date.fromisoformat, default=date.today() - timedelta(days=30), help="Start date"
+        "--start",
+        type=date.fromisoformat,
+        default=date.today() - timedelta(days=30),
+        help="Start date",
     )
-    top_tracks.add_argument("--end", type=date.fromisoformat, default=date.today(), help="End date (inclusive)")
-    top_tracks.add_argument("--limit", type=int, default=10, help="Number of top tracks to show")
+    top_tracks.add_argument(
+        "--end",
+        type=date.fromisoformat,
+        default=date.today(),
+        help="End date (inclusive)",
+    )
+    top_tracks.add_argument(
+        "--limit", type=int, default=10, help="Number of top tracks to show"
+    )
     top_tracks.set_defaults(func=cmd_top_tracks)
 
     today_last_year = subparser.add_parser(
@@ -357,7 +440,9 @@ def main():
         help="Top tracks from today last year",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    today_last_year.add_argument("--limit", type=int, default=10, help="Number of top tracks to show")
+    today_last_year.add_argument(
+        "--limit", type=int, default=10, help="Number of top tracks to show"
+    )
     today_last_year.set_defaults(func=cmd_today_last_year)
 
     args = parser.parse_args()
@@ -378,7 +463,9 @@ def main():
     except AttributeError:
         parser.error("too few arguments")
 
-    db = SpotifyHistoryDB(args.backup_dir / "history.sqlite", sql_debug=args.verbose > 1)
+    db = SpotifyHistoryDB(
+        args.backup_dir / "history.sqlite", sql_debug=args.verbose > 1
+    )
     func(db, args)
 
 
