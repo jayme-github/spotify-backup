@@ -32,7 +32,9 @@ class SpotifyClient(Spotify):
             scope=",".join(SCOPES),
             cache_handler=CacheFileHandler(cache_path=self.cache_path()),
         )
-        super().__init__(auth_manager=self._auth_manager)
+        status_forcelist = list(Spotify.default_retry_codes)
+        status_forcelist.append(401)
+        super().__init__(auth_manager=self._auth_manager, status_forcelist=status_forcelist)
         self.user_id = self.me()["id"]
 
     @staticmethod
@@ -58,7 +60,7 @@ class SpotifyClient(Spotify):
         for i in range(0, len(lst), n):
             yield lst[i : i + n]
 
-    def create_playlist(self, name: str, uris: List[str]) -> Dict:
+    def create_playlist(self, name: str, uris: Iterable[str]) -> Dict:
         """Create a copy of the playlist in json_path"""
         uris_count = len(uris)
         logger.info("Copying playlist as %s (%d tracks)", name, uris_count)

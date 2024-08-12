@@ -14,6 +14,8 @@ except ImportError:
 from spotify import SpotifyClient
 from spotify_history import SpotifyHistoryDB
 
+from spotipy.exceptions import SpotifyException
+
 _SAVED_OBJECT_TYPES = Literal["albums", "episodes", "shows", "tracks"]
 SAVED_OBJECT_TYPES: Tuple[_SAVED_OBJECT_TYPES, ...] = get_args(_SAVED_OBJECT_TYPES)
 _TOP_OBJECT_TYPES = Literal["artists", "tracks"]
@@ -49,11 +51,18 @@ class SpotifyBackup:
         return bdir
 
     def backup_everything(self):
-        self.backup_playlists()
-        self.backup_saved_objects()
-        self.backup_top_objects()
-        self.backup_followed_artists()
-        self.backup_history()
+        everything = (
+            self.backup_playlists,
+            self.backup_saved_objects,
+            self.backup_top_objects,
+            self.backup_followed_artists,
+            self.backup_history,
+        )
+        for func in everything:
+            try:
+                func()
+            except SpotifyException as e:
+                logger.error("Error during backup %s: %s", func.__name__, e)
 
     def _backup_playlist(self, playlist: Dict, path: Path):
         """Backup a playlist, including all track details"""
@@ -122,7 +131,9 @@ class SpotifyBackup:
                 logger.info("Backing up top %s %s", objtype, top_range)
                 func = getattr(self.sp, "current_user_top_" + objtype)
                 result = self.sp.get_all_items(func, time_range=top_range)
-                self._dump_json(self._ensure_dir() / f"top_{objtype}_{top_range}.json", result)
+                self._dump_json(
+                    self._ensure_dir() / f"top_{objtype}_{top_range}.json", result
+                )
 
         if objtype is None:
             for objtype in TOP_OBJECT_TYPES:
@@ -179,8 +190,12 @@ def main():
         default=Path(__file__).absolute().parent / "backup",
         help="Backup path",
     )
-    parser.add_argument("--pretty", action="store_true", help='Create "pretty" JSON files')
-    parser.add_argument("--history-only", action="store_true", help="Backup listening history only")
+    parser.add_argument(
+        "--pretty", action="store_true", help='Create "pretty" JSON files'
+    )
+    parser.add_argument(
+        "--history-only", action="store_true", help="Backup listening history only"
+    )
 
     args = parser.parse_args()
 
