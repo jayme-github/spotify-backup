@@ -271,7 +271,7 @@ class SpotifyHistoryDB:
                 tracks t ON h.track_id == t.track_id
             {where_clause}
             ORDER BY
-                h.played_at DESC
+                h.played_at ASC
             LIMIT ?
             """,
             args,
@@ -319,7 +319,6 @@ def cmd_history(db: SpotifyHistoryDB, args: argparse.Namespace):
     if args.create_playlist:
         spotify = SpotifyClient()
         track_ids = [item["track_id"] for item in history]
-        track_ids.reverse()
         playlist = spotify.create_playlist(args.create_playlist, track_ids)
         print(
             f"Playlist created with {len(track_ids)} tracks: {playlist['external_urls']['spotify']}"
