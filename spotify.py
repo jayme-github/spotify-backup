@@ -1,8 +1,7 @@
-import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List
+from typing import Any, Callable, Dict, Iterable
 
 from spotipy import Spotify
 from spotipy.cache_handler import CacheFileHandler

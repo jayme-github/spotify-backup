@@ -100,6 +100,11 @@ class SpotifyBackup:
         logger.info("Backing up playlists")
         path = Path("playlists")
         for playlist in self.sp.get_all_items(self.sp.current_user_playlists):
+            if playlist is None:
+                # The API started returning None/null items alongside SimplifiedPlaylistObjects
+                # for some reason.
+                logger.warning("Skipping None/null playlist object")
+                continue
             if playlist["owner"]["id"] == self.sp.user_id:
                 # my playlist
                 backup_dir = self._ensure_dir(path / "my")
