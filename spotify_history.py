@@ -15,8 +15,9 @@ from tabulate import tabulate
 
 from spotify import SpotifyClient
 
-INIT_TABLES = """
-BEGIN;
+MIGRATIONS = {
+    1: (
+        """
 CREATE TABLE IF NOT EXISTS "history" (
     played_at INTEGER PRIMARY KEY,
     track_id TEXT NOT NULL,
@@ -29,8 +30,15 @@ CREATE TABLE IF NOT EXISTS "tracks" (
     track_id TEXT PRIMARY KEY,
     data JSON
 );
-COMMIT;
-"""
+""",
+        [],
+    ),
+    2: (
+        "ALTER TABLE history ADD COLUMN ms_played INTEGER;",
+        ["backfill_ms_played"],
+    ),
+}
+
 
 logger = logging.getLogger(__name__)
 
@@ -97,17 +105,34 @@ class SpotifyHistoryDB:
         self.con = self.create_connection()
         if sql_debug:
             self.con.set_trace_callback(logger.getChild("sqlite").debug)
+        # Setup the database
+        cur = self.con.execute("PRAGMA user_version")
+        self.db_version = cur.fetchone()[0]
+        logger.info(f"Database version: {self.db_version}")
+        self._apply_migrations()
 
     def create_connection(self) -> sqlite3.Connection:
-        bootstrap_tables = not self.db_file.is_file()
         con = sqlite3.connect(str(self.db_file), detect_types=sqlite3.PARSE_COLNAMES)
         con.execute("PRAGMA foreign_keys = ON")
-        if bootstrap_tables:
-            con.executescript(INIT_TABLES)
         return con
 
     def close_connection(self):
         self.con.close()
+
+    def _apply_migrations(self):
+        for version, migration in MIGRATIONS.items():
+            query, funcs = migration
+            if version > self.db_version:
+                logger.info(f"Applying migration {version}")
+                with self.con:
+                    self.con.executescript(query)
+                    self.con.execute(f"PRAGMA user_version = {version}")
+                    self.db_version = version
+                    for func in funcs:
+                        logger.info(f"Running post-migration function {func}")
+                        ret = getattr(self, func)()
+                        logger.info(f"Function {func} returned: {ret}")
+                    logger.info(f"Applied migration {version}")
 
     def _cleanup_history_items(self, items):
         """Remove (probably irrelevant) keys from the history items to reduce the size of the history database"""
@@ -124,14 +149,17 @@ class SpotifyHistoryDB:
                 ),
             )
 
-    def _insert_history_item(self, cur: sqlite3.Cursor, played_at: int, track_id: str):
-        cur.execute(
-            "INSERT OR IGNORE INTO history VALUES (unixepoch(?), ?)",
+    def _insert_history_item(
+        self, cur: sqlite3.Cursor, played_at: int, track_id: str, ms_played: int = None
+    ) -> int:
+        return cur.execute(
+            "INSERT OR IGNORE INTO history VALUES (unixepoch(?), ?, ?)",
             (
                 played_at,
                 track_id,
+                ms_played,
             ),
-        )
+        ).rowcount
 
     def _insert_track(self, cur: sqlite3.Cursor, track_id: str, track: dict = None):
         if track is None:
@@ -145,20 +173,26 @@ class SpotifyHistoryDB:
                 (track_id, json.dumps(track)),
             )
 
-    def insert_play_history_objects(self, play_history_objects: List):
+    def insert_play_history_objects(self, play_history_objects: List, backfill_from: int = None) -> int:
         self._cleanup_history_items(play_history_objects)
         cur = self.con.cursor()
+        history_items_added = 0
         for item in play_history_objects:
             track = item["track"]
             track_id = track["id"]
             try:
-                self._insert_history_item(cur, item["played_at"], track_id)
+                history_items_added += self._insert_history_item(cur, item["played_at"], track_id)
             except sqlite3.IntegrityError:
                 self._insert_track(cur, track_id, track)
-                self._insert_history_item(cur, item["played_at"], track_id)
+                history_items_added += self._insert_history_item(cur, item["played_at"], track_id)
 
         cur.close()
         self.con.commit()
+        if backfill_from:
+            # Calculate ms_played for what was previously the last history item
+            # as well as all new history items added above
+            self.backfill_ms_played(backfill_from=backfill_from)
+        return history_items_added
 
     def insert_from_gdpr_json(self, json_file: Path, backfill=False):
         """Parse the listening history from a GDPR request data JSON file
@@ -175,23 +209,29 @@ class SpotifyHistoryDB:
                 ):
                     # Skip entries missing relevant data (like podcast episodes)
                     continue
-                if entry["ms_played"] < 1000:
-                    # Skip songs that were played for less than a second
+                ms_played = entry["ms_played"]
+                if ms_played == 0:
+                    # Skip tracks which have not been played
                     continue
                 played_at = entry["ts"]
                 track_id = entry["spotify_track_uri"].split(":")[-1]
-                history.add((played_at, track_id))
+                history.add((played_at, track_id, ms_played))
 
         cur = self.con.cursor()
         tracks_added = cur.executemany(
             "INSERT OR IGNORE INTO tracks (track_id) VALUES (?)",
-            [(track_id,) for _, track_id in history],
+            [(track_id,) for _, track_id, _ in history],
         ).rowcount
         logger.info(f"Added {tracks_added} tracks")
         history_added = cur.executemany(
-            "INSERT OR IGNORE INTO history VALUES (unixepoch(?), ?)", history
+            "INSERT OR IGNORE INTO history VALUES (unixepoch(?), ?, ?)", history
         ).rowcount
         logger.info(f"Added {history_added} history items")
+        history_updated = cur.executemany(
+            "UPDATE history SET ms_played=? WHERE played_at=unixepoch(?) and ms_played IS NULL",
+            [[h[2], h[0]] for h in history],
+        ).rowcount
+        logger.info(f"Updated {history_updated} history items with ms_played")
         cur.close()
         self.con.commit()
 
@@ -231,6 +271,54 @@ class SpotifyHistoryDB:
                 f"Backfilled {backfilled_tracks} of {tracks_to_backfill} tracks"
             )
         cur.close()
+
+    def backfill_ms_played(self, backfill_from: int = 0) -> int:
+        cur = self.con.cursor()
+        cur.row_factory = dict_factory
+        cur.execute(
+            """
+            SELECT
+                h.played_at,
+                t.track_id,
+                json_extract(t.data, '$.duration_ms') AS duration_ms,
+                ms_played
+                FROM history h
+                JOIN tracks t ON h.track_id = t.track_id
+                WHERE played_at >= ?
+                ORDER BY h.played_at
+            """,
+            (backfill_from,),
+        )
+        data = cur.fetchall()
+        # Calculate a plausible ms_played for each track as spotify does only provide that field in the GDPR data export
+        for idx, row in enumerate(data):
+            if row["ms_played"] is not None:
+                # Skip rows that already have a ms_played value
+                continue
+            try:
+                next_row = data[idx + 1]
+            except IndexError:
+                # last track, nothing to do
+                break
+            # Calculate the end time of a full playback of the current track
+            full_play = row["played_at"] + (row["duration_ms"] / 1000)
+
+            # If the next track was played before the full playback of the current track, calculate the ms_played from
+            # the time between the start of the current track and the start of the next track (in milliseconds).
+            # Otherwise, assume the track was played in full.
+            if next_row["played_at"] < full_play:
+                row["ms_played"] = (next_row["played_at"] - row["played_at"]) * 1000
+            else:
+                row["ms_played"] = row["duration_ms"]
+
+        history_updated = cur.executemany(
+            "UPDATE history SET ms_played=? WHERE played_at=? AND ms_played IS NULL",
+            [(x["ms_played"], x["played_at"]) for x in data],
+        ).rowcount
+        logger.info(f"Backfilled {history_updated} ms_played values")
+        cur.close()
+        self.con.commit()
+        return history_updated
 
     def get_most_recent_timestamp(self) -> int:
         cur = self.con.execute("SELECT MAX(played_at) FROM history")
@@ -339,7 +427,8 @@ def cmd_top_tracks(db: SpotifyHistoryDB, args: argparse.Namespace):
     end = args.end
     top = db.get_top_tracks(start, end, args.limit)
     print(
-        f"Top {str(args.limit) + ' ' if args.limit > 0 else ''}tracks from {start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}:"
+        f"Top {str(args.limit) + ' ' if args.limit > 0 else ''}tracks from "
+        f"{start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}:"
     )
     print_table(
         top,

@@ -4,17 +4,17 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Optional, Tuple, get_args
+from typing import Dict, List, Optional, Tuple, get_args
 
 try:
     from typing import Literal
 except ImportError:
     from typing_extensions import Literal  # type: ignore
 
+from spotipy.exceptions import SpotifyException
+
 from spotify import SpotifyClient
 from spotify_history import SpotifyHistoryDB
-
-from spotipy.exceptions import SpotifyException
 
 _SAVED_OBJECT_TYPES = Literal["albums", "episodes", "shows", "tracks"]
 SAVED_OBJECT_TYPES: Tuple[_SAVED_OBJECT_TYPES, ...] = get_args(_SAVED_OBJECT_TYPES)
@@ -170,16 +170,18 @@ class SpotifyBackup:
         """
         logger.info("Backing up listening history")
         db = SpotifyHistoryDB(self._ensure_dir() / "history.sqlite")
-        # Add a second to the last timestamp to avoid duplicates
-        after = (db.get_most_recent_timestamp() * 1000) + 1000
-        result = self.sp.current_user_recently_played(after=after)
-        items = result["items"]
+        after = db.get_most_recent_timestamp()
+        result = self.sp.current_user_recently_played(
+            after=after
+        )
+        items: List = result["items"]
         while result["next"]:
             result = self.sp.next(result)
             items.extend(result["items"])
         if items:
             logger.info("Backing up %d history items", len(items))
-            db.insert_play_history_objects(items)
+            items_added = db.insert_play_history_objects(items, after)
+            logger.info("Added %d history items", items_added)
         db.close_connection()
 
 
